@@ -1,0 +1,7 @@
+[package]
+name = "netty"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+websocket = { version = "0.26.5", features = ["sync"] }
