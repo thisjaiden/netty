@@ -48,6 +48,7 @@ impl <P, G>Default for ServerConfig<P, G> {
     }
 }
 
+/// Attempt to create a new server with `config` and launch it on the network
 pub fn launch_server<P: Packet + Sync + Send + 'static + Clone, G: Any + Clone + Default + Sync + Send + Clone>(config: ServerConfig<P, G>) -> ! {
     let state = Arc::new(Mutex::new(G::default()));
     let tcp = tcp::listener(config.clone());
