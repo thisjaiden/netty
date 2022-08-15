@@ -52,23 +52,38 @@ impl <P: Packet + Sync + Send + Clone + 'static>Client<P> {
                 let thread_tx = outgoing.clone();
                 let thread_rx = incoming.clone();
                 std::thread::spawn(move || {
+                    println!("Thread spawned");
                     let mut last_loop = Instant::now();
                     loop {
+                        println!("Thread looped");
                         let mut tx_access = thread_tx.lock().unwrap();
+                        println!("Got access");
                         let to_tx = tx_access.clone();
                         tx_access.clear();
                         drop(tx_access);
                         for packet in to_tx {
                             packet.write(&mut connection);
                         }
-                        let mut rx_access = thread_rx.lock().unwrap();
-                        while let Some(packet) = Packet::from_reader(&mut connection) {
-                            rx_access.push(packet);
+                        'pkt: loop {
+                            if let Ok(amnt) = connection.peek(&mut [0; 8]) {
+                                if amnt > 1 {
+                                    let mut rx_access = thread_rx.lock().unwrap();
+                                    rx_access.push(Packet::from_reader(&mut connection));
+                                    drop(rx_access);
+                                }
+                                else {
+                                    break 'pkt;
+                                }
+                            }
                         }
-                        drop(rx_access);
+                        
                         let delta_time = last_loop.elapsed();
                         if delta_time < config.tick_delay {
+                            println!("sleeping for some time");
                             std::thread::sleep(config.tick_delay - delta_time);
+                        }
+                        else {
+                            println!("loop took {:?} which is greater than {:?}, not sleeping!", delta_time, config.tick_delay);
                         }
                         last_loop = Instant::now();
                     }
@@ -91,6 +106,7 @@ impl <P: Packet + Sync + Send + Clone + 'static>Client<P> {
     /// Sends a packet to the remote server
     pub fn send(&mut self, packet: P) {
         let mut tx_access = self.outgoing.lock().unwrap();
+        println!("got lock handel");
         tx_access.push(packet);
         drop(tx_access);
     }

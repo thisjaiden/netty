@@ -154,11 +154,13 @@ fn worker_thread<P: Packet + Sync + Send, G: Any + Clone + Default + Sync + Send
         }
         let mut outgoing_packs = vec![];
         for con in tcp_connections.iter_mut() {
-            let read_attempt: Option<P> = P::from_reader(&mut con.0);
-            if let Some(packet) = read_attempt {
-                let sendables = (config.handler)(packet, globals.clone(), con.1);
-                for pack in sendables {
-                    outgoing_packs.push(pack);
+            if let Ok(amnt) = con.0.peek(&mut [0; 8]) {
+                if amnt > 1 {
+                    let packet = P::from_reader(&mut con.0);
+                    let sendables = (config.handler)(packet, globals.clone(), con.1);
+                    for pack in sendables {
+                        outgoing_packs.push(pack);
+                    }
                 }
             }
         }

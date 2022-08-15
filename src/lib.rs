@@ -92,10 +92,8 @@ pub mod client;
 
 /// Describes a packet format used to communicate data over the network.
 pub trait Packet: Sized {
-    /// Takes a given reader `R` and attempts to gather a packet from it. Returning None is not
-    /// considered an error and should be used to avoid blocking. netty will not work if this
-    /// function blocks.
-    fn from_reader<R: std::io::Read>(_: &mut R) -> Option<Self>;
+    /// Takes a given reader `R` and attempts to gather a packet from it.
+    fn from_reader<R: std::io::Read>(_: &mut R) -> Self;
     /// Takes a given packet and writes it to a buffer `W`
     fn write<W: std::io::Write + ?Sized>(&self, _: &mut W) -> ();
 }
