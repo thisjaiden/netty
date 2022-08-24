@@ -1,11 +1,13 @@
 mod tcp;
 mod ws;
 
+use websocket::OwnedMessage;
 use websocket::sync::Client;
 
 use crate::Packet;
 
 use std::any::Any;
+use std::io::Cursor;
 use std::net::{TcpStream, SocketAddr};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -92,6 +94,8 @@ pub fn launch_server<P: Packet + Sync + Send + 'static + Clone, G: Any + Clone +
 fn worker_thread<P: Packet + Sync + Send, G: Any + Clone + Default + Sync + Send>(task_dispatcher: Receiver<Task<P>>, return_task: Sender<Task<P>>, globals: Arc<Mutex<G>>, config: ServerConfig<P, G>) {
     let mut tcp_connections = vec![];
     let mut ws_connections = vec![];
+    let mut ws_input_buffers: Vec<Vec<u8>> = vec![];
+    let mut last_loop = Instant::now();
     loop {
         if let Ok(task) = task_dispatcher.try_recv() {
             match task {
@@ -99,7 +103,9 @@ fn worker_thread<P: Packet + Sync + Send, G: Any + Clone + Default + Sync + Send
                     tcp_connections.push(con);
                 },
                 Task::WsConnection(con) => {
+                    con.0.set_nonblocking(true).unwrap();
                     ws_connections.push(con);
+                    ws_input_buffers.push(vec![]);
                 },
                 Task::Message(msg, loc) => {
                     let mut sent = false;
@@ -156,10 +162,39 @@ fn worker_thread<P: Packet + Sync + Send, G: Any + Clone + Default + Sync + Send
         for con in tcp_connections.iter_mut() {
             if let Ok(amnt) = con.0.peek(&mut [0; 8]) {
                 if amnt > 1 {
-                    let packet = P::from_reader(&mut con.0);
+                    let packet = P::from_reader(&mut con.0).expect("Failed to build TCP Packet!");
                     let sendables = (config.handler)(packet, globals.clone(), con.1);
                     for pack in sendables {
                         outgoing_packs.push(pack);
+                    }
+                }
+            }
+        }
+        for (index, (con, loc)) in ws_connections.iter_mut().enumerate() {
+            // TODO
+            let pot_message = con.recv_message();
+            if let Ok(message) = pot_message {
+                if message.is_data() {
+                    match message {
+                        OwnedMessage::Binary(mut data) => {
+                            let mut working_data = ws_input_buffers[index].clone();
+                            working_data.append(&mut data);
+                            let mut working_cursor = Cursor::new(working_data.clone());
+                            let pot_packet = P::from_reader(&mut working_cursor);
+                            if let Some(packet) = pot_packet {
+                                ws_input_buffers[index] = working_data.split_at(working_cursor.position() as usize).1.to_vec();
+                                let sendables = (config.handler)(packet, globals.clone(), *loc);
+                                for pack in sendables {
+                                    outgoing_packs.push(pack);
+                                }
+                            }
+                            else {
+                                ws_input_buffers[index].append(&mut data);
+                            }
+                        }
+                        _ => {
+                            panic!();
+                        }
                     }
                 }
             }
@@ -177,6 +212,11 @@ fn worker_thread<P: Packet + Sync + Send, G: Any + Clone + Default + Sync + Send
                 return_task.send(Task::Message(packet, loc)).unwrap();
             }
         }
+        let delta_time = last_loop.elapsed();
+        if delta_time < config.tick_delay {
+            std::thread::sleep(config.tick_delay - delta_time);
+        }
+        last_loop = Instant::now();
     }
 }
 
