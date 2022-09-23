@@ -141,9 +141,6 @@ impl <P: Packet + Sync + Send + Clone + 'static>Client<P> {
 }
 
 #[cfg(target_arch = "wasm32")]
-static mut conner: Option<Pin<Box<wasm_sockets::PollingClient>>> = None;
-
-#[cfg(target_arch = "wasm32")]
 impl <P: Packet + Sync + Send + Clone + 'static>Client<P> {
     pub fn launch(config: ClientConfig) -> Option<Client<P>> {
         use wasm_bindgen::prelude::*;

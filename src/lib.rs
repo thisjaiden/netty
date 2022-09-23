@@ -60,10 +60,6 @@
 //!     fn write<W: std::io::Write + ?Sized>(&self, writer: &mut W) {
 //!         unimplemented!()
 //!     }
-//!     /// Since we're not a server, a handler isn't needed and this function can be ignored.
-//!     fn handler(&self, _glbs: Arc<Mutex<Globals>>, addr: SocketAddr) -> Vec<(Self, SocketAddr)> {
-//!         unimplemented!()
-//!     }
 //! }
 //! 
 //! #[derive(Clone, Default)]
@@ -87,15 +83,24 @@
 
 /// Types and functions for creating a server
 #[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(feature = "legacy_threaded"))]
 pub mod server;
 /// Types and functions for creating a client
+#[cfg(not(feature = "legacy_threaded"))]
 pub mod client;
+#[cfg(feature = "legacy_threaded")]
+mod legacy;
+#[cfg(feature = "legacy_threaded")]
+pub use legacy::*;
 
 /// Describes a packet format used to communicate data over the network.
 pub trait Packet: Sized {
     /// Takes a given reader `R` and attempts to gather a packet from it. Returning `None` indicates
     /// there is not enough data to build a packet.
+    #[cfg(not(feature = "legacy_threaded"))]
     fn from_reader<R: std::io::Read>(_: &mut R) -> Option<Self>;
+    #[cfg(feature = "legacy_threaded")]
+    fn from_reader<R: std::io::Read>(_: &mut R) -> Self;
     /// Takes a given packet and writes it to a buffer `W`
     fn write<W: std::io::Write + ?Sized>(&self, _: &mut W) -> ();
 }

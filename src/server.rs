@@ -54,245 +54,40 @@ impl <P, G>Default for ServerConfig<P, G> {
 pub fn launch_server<P: Packet + Sync + Send + 'static + Clone, G: Any + Clone + Default + Sync + Send + Clone>(config: ServerConfig<P, G>) -> ! {
     let state = Arc::new(Mutex::new(G::default()));
     let tcp = tcp::listener(config.clone());
-    let mut ws = ws::listener(config.clone());
-    let (ptx, prx): (Sender<Task<P>>, Receiver<Task<P>>) = mpsc::channel();
+    // let mut ws = ws::listener(config.clone());
+    let rxbuf = Arc::new(Mutex::new(Vec::new()));
+    let txbuf: Arc<Mutex<Vec<(P, SocketAddr)>>> = Arc::new(Mutex::new(Vec::new()));
     
-    let mut task_dispatcher = TaskDispatcher::new(prx);
-    for _ in 0..config.worker_threads {
-        let thread_config = config.clone();
-        let thread_state = state.clone();
-        let (tx, rx): (Sender<Task<P>>, Receiver<Task<P>>) = mpsc::channel();
-        task_dispatcher.add_channel(tx);
-        let ptxc = ptx.clone();
+    loop {
+        let mut a = tcp.accept().unwrap();
+        let mut a2 = (a.0.try_clone().unwrap(), a.1.clone());
+        let thread_rx = rxbuf.clone();
+        let thread_tx = txbuf.clone();
         thread::spawn(move || {
-            worker_thread::<P, G>(rx, ptxc, thread_state, thread_config);
+            loop {
+                let packet = P::from_reader(&mut a.0);
+                let mut rx_access = thread_rx.lock().unwrap();
+                rx_access.push(packet);
+                drop(rx_access);
+            }
         });
-    }
-    let mut last_loop = Instant::now();
-    loop {
-        task_dispatcher.dispatch(Task::Tick);
-        let potential_connection = tcp.accept();
-        if let Ok(connection) = potential_connection {
-            task_dispatcher.dispatch(Task::TcpConnection(connection));
-        }
-        let potential_connection = ws.accept();
-        if let Ok(handshake) = potential_connection {
-            if let Ok(connection) = handshake.accept() {
-                let remote = connection.peer_addr().unwrap();
-                task_dispatcher.dispatch(Task::WsConnection((connection, remote)));
-            }
-        }
-        let delta_time = last_loop.elapsed();
-        if delta_time < config.tick_delay {
-            std::thread::sleep(config.tick_delay - delta_time);
-        }
-        task_dispatcher.process_returns();
-        last_loop = Instant::now();
-    }
-}
-
-fn worker_thread<P: Packet + Sync + Send, G: Any + Clone + Default + Sync + Send>(task_dispatcher: Receiver<Task<P>>, return_task: Sender<Task<P>>, globals: Arc<Mutex<G>>, config: ServerConfig<P, G>) {
-    let mut tcp_connections = vec![];
-    let mut ws_connections = vec![];
-    let mut ws_input_buffers: Vec<Vec<u8>> = vec![];
-    let mut last_loop = Instant::now();
-    loop {
-        if let Ok(task) = task_dispatcher.try_recv() {
-            match task {
-                Task::TcpConnection(con) => {
-                    tcp_connections.push(con);
-                },
-                Task::WsConnection(con) => {
-                    con.0.set_nonblocking(true).unwrap();
-                    ws_connections.push(con);
-                    ws_input_buffers.push(vec![]);
-                },
-                Task::Message(msg, loc) => {
-                    let mut sent = false;
-                    for (con, addr) in tcp_connections.iter_mut() {
-                        if addr == &loc {
-                            msg.write(con);
-                            sent = true;
-                            break;
-                        }
-                    }
-                    if !sent {
-                        for (con, addr) in ws_connections.iter_mut() {
-                            if addr == &loc {
-                                let writer = con.writer_mut();
-                                msg.write(writer);
-                                sent = true;
-                                break;
-                            }
-                        }
-                    }
-                    if !sent {
-                        return_task.send(Task::Message(msg, loc)).unwrap();
-                    }
-                },
-                Task::Tick => {
-                    let outgoing = (config.tick)(globals.clone());
-                    for (msg, loc) in outgoing {
-                        let mut sent = false;
-                        for (con, addr) in tcp_connections.iter_mut() {
-                            if addr == &loc {
-                                msg.write(con);
-                                sent = true;
-                                break;
-                            }
-                        }
-                        if !sent {
-                            for (con, addr) in ws_connections.iter_mut() {
-                                if addr == &loc {
-                                    let writer = con.writer_mut();
-                                    msg.write(writer);
-                                    sent = true;
-                                    break;
-                                }
-                            }
-                        }
-                        if !sent {
-                            return_task.send(Task::Message(msg, loc)).unwrap();
-                        }
-                    }
-                }
-            }
-        }
-        let mut outgoing_packs = vec![];
-        for con in tcp_connections.iter_mut() {
-            if let Ok(amnt) = con.0.peek(&mut [0; 8]) {
-                if amnt > 1 {
-                    let packet = P::from_reader(&mut con.0).expect("Failed to build TCP Packet!");
-                    let sendables = (config.handler)(packet, globals.clone(), con.1);
-                    for pack in sendables {
-                        outgoing_packs.push(pack);
-                    }
-                }
-            }
-        }
-        for (index, (con, loc)) in ws_connections.iter_mut().enumerate() {
-            // TODO
-            let pot_message = con.recv_message();
-            if let Ok(message) = pot_message {
-                if message.is_data() {
-                    match message {
-                        OwnedMessage::Binary(mut data) => {
-                            let mut working_data = ws_input_buffers[index].clone();
-                            working_data.append(&mut data);
-                            let mut working_cursor = Cursor::new(working_data.clone());
-                            let pot_packet = P::from_reader(&mut working_cursor);
-                            if let Some(packet) = pot_packet {
-                                ws_input_buffers[index] = working_data.split_at(working_cursor.position() as usize).1.to_vec();
-                                let sendables = (config.handler)(packet, globals.clone(), *loc);
-                                for pack in sendables {
-                                    outgoing_packs.push(pack);
-                                }
-                            }
-                            else {
-                                ws_input_buffers[index].append(&mut data);
-                            }
-                        }
-                        _ => {
-                            panic!();
-                        }
-                    }
-                }
-            }
-        }
-        for (packet, loc) in outgoing_packs {
-            let mut sent = false;
-            for (con, addr) in tcp_connections.iter_mut() {
-                if loc == *addr {
-                    packet.write(con);
-                    sent = true;
-                    break;
-                }
-            }
-            if !sent {
-                return_task.send(Task::Message(packet, loc)).unwrap();
-            }
-        }
-        let delta_time = last_loop.elapsed();
-        if delta_time < config.tick_delay {
-            std::thread::sleep(config.tick_delay - delta_time);
-        }
-        last_loop = Instant::now();
-    }
-}
-
-enum Task<P: Packet> {
-    TcpConnection((TcpStream, SocketAddr)),
-    WsConnection((Client<TcpStream>, SocketAddr)),
-    Message(P, SocketAddr),
-    Tick
-}
-
-struct TaskDispatcher<P: Packet> {
-    channels: Vec<Sender<Task<P>>>,
-    channel_addresses: Vec<(SocketAddr, usize)>,
-    returns: Receiver<Task<P>>,
-    last_pushed: usize
-}
-
-impl <P: Packet>TaskDispatcher<P> {
-    fn new(returns: Receiver<Task<P>>) -> TaskDispatcher<P> {
-        TaskDispatcher { channels: vec![], channel_addresses: vec![], last_pushed: 0, returns }
-    }
-    fn add_channel(&mut self, channel: Sender<Task<P>>) {
-        self.channels.push(channel);
-    }
-    fn dispatch(&mut self, task: Task<P>) {
-        match task {
-            Task::Message(ref _msg, addr) => {
-                let mut sent = false;
-                for (loc, index) in &self.channel_addresses {
-                    if addr == *loc {
-                        self.channels[*index].send(task).unwrap();
-                        sent = true;
+        thread::spawn(move || {
+            loop {
+                let mut tx_access = thread_tx.lock().unwrap();
+                let mut wrote_index = None;
+                for (index, (data, loc)) in tx_access.iter().enumerate() {
+                    if loc == &a2.1 {
+                        data.write(&mut a2.0);
+                        wrote_index = Some(index);
                         break;
                     }
                 }
-                if !sent {
-                    panic!();
+                if let Some(index) = wrote_index {
+                    tx_access.remove(index);
                 }
+                drop(tx_access);
+                std::thread::sleep(config.tick_delay);
             }
-            Task::TcpConnection((ref _s, addr)) => {
-                if self.last_pushed == self.channels.len() - 1 {
-                    self.channels[0].send(task).unwrap();
-                    self.last_pushed = 0;
-                }
-                else {
-                    self.channels[self.last_pushed + 1].send(task).unwrap();
-                    self.last_pushed += 1;
-                }
-                self.channel_addresses.push((addr, self.last_pushed));
-            }
-            Task::WsConnection((ref _s, addr)) => {
-                if self.last_pushed == self.channels.len() - 1 {
-                    self.channels[0].send(task).unwrap();
-                    self.last_pushed = 0;
-                }
-                else {
-                    self.channels[self.last_pushed + 1].send(task).unwrap();
-                    self.last_pushed += 1;
-                }
-                self.channel_addresses.push((addr, self.last_pushed));
-            }
-            _ => {
-                if self.last_pushed == self.channels.len() - 1 {
-                    self.channels[0].send(task).unwrap();
-                    self.last_pushed = 0;
-                }
-                else {
-                    self.channels[self.last_pushed + 1].send(task).unwrap();
-                    self.last_pushed += 1;
-                }
-            }
-        }
-    }
-    fn process_returns(&mut self) {
-        while let Ok(task) = self.returns.try_recv() {
-            self.dispatch(task);
-        }
+        });
     }
 }
