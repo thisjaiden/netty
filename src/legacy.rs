@@ -210,16 +210,21 @@ pub mod server {
                 let mut delta_time;
                 loop {
                     let mut out_access = client_cp3.lock().unwrap();
-                    let mut mutual = None;
-                    for (index, (pkt, addr)) in out_access.iter().enumerate() {
-                        if &source_addr == addr {
-                            pkt.write(&mut client_cp4);
-                            mutual = Some(index);
+                    loop {
+                        let mut mutual = None;
+                        for (index, (pkt, addr)) in out_access.iter().enumerate() {
+                            if &source_addr == addr {
+                                pkt.write(&mut client_cp4);
+                                mutual = Some(index);
+                                break;
+                            }
+                        }
+                        if let Some(val) = mutual {
+                            out_access.swap_remove(val);
+                        }
+                        else {
                             break;
                         }
-                    }
-                    if let Some(val) = mutual {
-                        out_access.swap_remove(val);
                     }
                     drop(out_access);
                     delta_time = last_loop.elapsed();
