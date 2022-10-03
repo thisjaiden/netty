@@ -107,9 +107,6 @@ pub mod client {
             let mut rx_access = self.incoming.lock().unwrap();
             let data = rx_access.clone();
             rx_access.clear();
-            if !data.is_empty() {
-                println!("Client got a packet");
-            }
             return data;
         }
     }
