@@ -101,6 +101,8 @@ pub trait Packet: Sized {
     fn from_reader<R: std::io::Read>(_: &mut R) -> Option<Self>;
     #[cfg(feature = "legacy_threaded")]
     fn from_reader<R: std::io::Read>(_: &mut R) -> Self;
+    /// Serializes a packet into a byte array. Must be deserializable with `from_reader`.
+    fn to_vec(&self) -> Vec<u8>;
     /// Takes a given packet and writes it to a buffer `W`
     fn write<W: std::io::Write + ?Sized>(&self, _: &mut W) -> ();
 }

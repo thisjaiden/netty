@@ -1,18 +1,12 @@
 mod tcp;
-mod ws;
-
-use websocket::OwnedMessage;
-use websocket::sync::Client;
 
 use crate::Packet;
 
 use std::any::Any;
-use std::io::Cursor;
-use std::net::{TcpStream, SocketAddr};
+use std::net::SocketAddr;
 use std::thread;
-use std::time::{Duration, Instant};
-use std::sync::mpsc::{Sender, Receiver};
-use std::sync::{mpsc, Mutex, Arc};
+use std::time::Duration;
+use std::sync::{Mutex, Arc};
 
 /// Describes the configuration that a server will use
 #[derive(Clone, Copy)]
@@ -52,7 +46,7 @@ impl <P, G>Default for ServerConfig<P, G> {
 
 /// Attempt to create a new server with `config` and launch it on the network
 pub fn launch_server<P: Packet + Sync + Send + 'static + Clone, G: Any + Clone + Default + Sync + Send + Clone>(config: ServerConfig<P, G>) -> ! {
-    let state = Arc::new(Mutex::new(G::default()));
+    let _state = Arc::new(Mutex::new(G::default()));
     let tcp = tcp::listener(config.clone());
     // let mut ws = ws::listener(config.clone());
     let rxbuf = Arc::new(Mutex::new(Vec::new()));

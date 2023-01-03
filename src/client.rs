@@ -1,22 +1,11 @@
 use crate::{Packet, LOCAL_ADDRESS};
 
-use std::io::Cursor;
-use std::marker::PhantomData;
-use std::pin::Pin;
 use std::net::{TcpStream, SocketAddr};
 use std::sync::{Mutex, Arc};
 use std::time::{Duration, Instant};
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
-
-#[cfg(target_arch = "wasm32")]
-#[wasm_bindgen(module = "/src/netty.js")]
-extern "C" {
-    fn start_ws(address: &str) -> u32;
-    fn get_ws() -> Box<[u8]>;
-    fn send_ws(input_data: &[u8]);
-}
 
 /// Describes the configuration that a client will use
 pub struct ClientConfig {
